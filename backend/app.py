@@ -40,13 +40,16 @@ video_thread = None
 def init_db():
     conn = sqlite3.connect("plates.db")
     cursor = conn.cursor()
-    cursor.execute('''CREATE TABLE IF NOT EXISTS detected_plates (
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS detected_plates (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             plate_text TEXT NOT NULL,
             timestamp TEXT NOT NULL,
             image_base64 TEXT,
             parking_spot TEXT,
-            spot_coordinates TEXT)''')
+            spot_coordinates TEXT
+        )
+    ''')
     conn.commit()
     conn.close()
 
@@ -55,14 +58,18 @@ init_db()
 def save_to_db(plate_text, image_base64=None, parking_spot=None, spot_coordinates=None):
     conn = sqlite3.connect("plates.db")
     cursor = conn.cursor()
-    cursor.execute('''INSERT INTO detected_plates (plate_text, timestamp, image_base64, parking_spot, spot_coordinates) 
-                      VALUES (?, ?, ?, ?, ?)''', 
-                   (plate_text, datetime.now().isoformat(), image_base64, parking_spot, json.dumps(spot_coordinates) if spot_coordinates else None))
+    cursor.execute(
+        '''INSERT INTO detected_plates 
+        (plate_text, timestamp, image_base64, parking_spot, spot_coordinates) 
+        VALUES (?, ?, ?, ?, ?)''',
+        (plate_text, datetime.now().isoformat(), image_base64, 
+         parking_spot, json.dumps(spot_coordinates) if spot_coordinates else None)
+    )
     conn.commit()
     conn.close()
 
 # ---------- VIDEO PROCESSING ----------
-def process_video(video_source="C:/Users/stly3/anpr_system/backend/parking_1920_1080.mp4"):
+def process_video(video_source=0):
     global latest_frame, processing_active, parking_allocations
     
     cap = cv2.VideoCapture(video_source)
@@ -77,9 +84,7 @@ def process_video(video_source="C:/Users/stly3/anpr_system/backend/parking_1920_
     while processing_active:
         ret, frame = cap.read()
         if not ret:
-            # Reset to the first frame (loop the video)
-            cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-            continue
+            break
             
         frame_count += 1
         
@@ -131,7 +136,7 @@ def process_video(video_source="C:/Users/stly3/anpr_system/backend/parking_1920_
                     continue
                 
                 free_spots = [spot for spot in parking_predictions.get("predictions", []) 
-                             if spot["class"] == "free"]
+                             if spot["class"] == "kosong"]
                 
                 if free_spots:
                     # Allocate the first free spot
@@ -139,7 +144,7 @@ def process_video(video_source="C:/Users/stly3/anpr_system/backend/parking_1920_
                     spot_coords = (allocated_spot['x'], allocated_spot['y'], 
                                   allocated_spot['width'], allocated_spot['height'])
                     parking_spot_id = f"spot_{allocated_spot['x']}_{allocated_spot['y']}"
-
+                    
                     # Save allocation
                     parking_allocations[parking_spot_id] = {
                         "plate_text": text,
@@ -160,7 +165,7 @@ def process_video(video_source="C:/Users/stly3/anpr_system/backend/parking_1920_
             cv2.rectangle(frame, 
                          (int(x - w/2), int(y - h/2)),
                          (int(x + w/2), int(y + h/2)),
-                         (0, 0, 255), 2)  # Red rectangle
+                         (0, 255, 0), 2)
             
             # Draw the plate text on the parking spot
             cv2.putText(frame, plate_text, (int(x), int(y)), 
@@ -183,7 +188,8 @@ def generate_frames():
             ret, buffer = cv2.imencode('.jpg', latest_frame)
             if not ret:
                 continue
-                frame = buffer.tobytes()
+                
+            frame = buffer.tobytes()
         
         yield (b'--frame\r\n'
                b'Content-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
@@ -193,6 +199,33 @@ def generate_frames():
 def video_feed():
     return Response(generate_frames(), 
                    mimetype='multipart/x-mixed-replace; boundary=frame')
+
+@app.route("/start_processing", methods=["POST"])
+def start_processing():
+    global processing_active, video_thread
+    
+    if processing_active:
+        return jsonify({"status": "already running"})
+    
+    video_source = request.json.get("video_source", 0)
+    if isinstance(video_source, str) and video_source.isdigit():
+        video_source = int(video_source)
+    
+    video_thread = threading.Thread(target=process_video, args=(video_source,))
+    video_thread.daemon = True
+    video_thread.start()
+    
+    return jsonify({"status": "started"})
+
+@app.route("/stop_processing", methods=["POST"])
+def stop_processing():
+    global processing_active
+    
+    processing_active = False
+    if video_thread and video_thread.is_alive():
+        video_thread.join()
+    
+    return jsonify({"status": "stopped"})
 
 @app.route("/allocations", methods=["GET"])
 def get_allocations():
@@ -227,10 +260,46 @@ def upload():
         )
         text = ''.join(c for c in text if c.isalnum())
 
+        _, buffer = cv2.imencode('.jpg', thresh)
+        img_b64 = base64.b64encode(buffer).decode('utf-8')
+
         if len(text) >= 4:
-            plates.append(text)
-    
+            save_to_db(text, img_b64)
+            plates.append({"text": text, "image": img_b64})
+
+    try:
+        os.remove(file_path)
+    except OSError:
+        pass
+
     return jsonify({"plates": plates})
 
+@app.route("/plates", methods=["GET"])
+def get_stored_plates():
+    conn = sqlite3.connect("plates.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT plate_text, timestamp, image_base64, parking_spot, spot_coordinates FROM detected_plates ORDER BY timestamp DESC")
+    rows = cursor.fetchall()
+    conn.close()
+
+    data = [
+        {
+            "text": row[0], 
+            "timestamp": row[1], 
+            "image": row[2], 
+            "parking_spot": row[3],
+            "spot_coordinates": json.loads(row[4]) if row[4] else None
+        }
+        for row in rows
+    ]
+    return jsonify({"stored_plates": data})
+
+@app.route("/clear_allocations", methods=["POST"])
+def clear_allocations():
+    global parking_allocations
+    parking_allocations = {}
+    return jsonify({"status": "allocations cleared"})
+
 if __name__ == "__main__":
-    app.run(debug=True)
+    os.makedirs("temp", exist_ok=True)
+    app.run(host='0.0.0.0', port=5000, threaded=True)
