@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import axios from "axios";
-import { Button, Card, Alert, Form, Spinner } from "react-bootstrap";
+import { Button, Card, Alert, Form, Spinner, Modal } from "react-bootstrap";
 
 function UploadSingleImage() {
   const [image, setImage] = useState(null);
@@ -8,6 +8,8 @@ function UploadSingleImage() {
   const [allocations, setAllocations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [popupMessage, setPopupMessage] = useState("");  // State for popup message
+  const [popupType, setPopupType] = useState("");  // Success or error type
 
   const handleChange = (e) => setImage(e.target.files[0]);
 
@@ -28,6 +30,13 @@ function UploadSingleImage() {
       // Assuming the backend sends both detected plates and allocations
       setResults(response.data.plates || []);
       setAllocations(response.data.allocations || []);
+
+      // Check if there are notifications to show (for entry/exit)
+      if (response.data.notifications && response.data.notifications.length > 0) {
+        const notification = response.data.notifications[0]; // Assuming one notification per plate
+        setPopupMessage(`Plate ${notification.plate} has ${notification.status} for ${notification.duration || 'N/A'}`);
+        setPopupType(notification.status === "exit" ? "success" : "info");
+      }
     } catch {
       setError("Error processing image.");
     } finally {
@@ -89,6 +98,21 @@ function UploadSingleImage() {
           ))}
         </div>
       )}
+
+      {/* Popup Modal for Notification */}
+      <Modal show={popupMessage !== ""} onHide={() => setPopupMessage("")}>
+        <Modal.Header closeButton>
+          <Modal.Title>{popupType === "success" ? "Car Exit Detected" : "Car Entry Detected"}</Modal.Title>
+        </Modal.Header>
+        <Modal.Body>
+          <p>{popupMessage}</p>
+        </Modal.Body>
+        <Modal.Footer>
+          <Button variant="secondary" onClick={() => setPopupMessage("")}>
+            Close
+          </Button>
+        </Modal.Footer>
+      </Modal>
     </>
   );
 }
