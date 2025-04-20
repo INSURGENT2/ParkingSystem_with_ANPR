@@ -3,6 +3,8 @@ import { BrowserRouter as Router, Routes, Route, Link } from "react-router-dom";
 import UploadSingleImage from "./components/UploadSingleImage";
 import StoredPlates from "./components/StoredPlates";
 import LiveCameraFeed from "./components/LiveCameraFeed";
+import RegisteredCars from "./components/RegisteredCars"; // ← ADD THIS
+
 import { Container, Navbar, Nav, Button } from "react-bootstrap";
 import "bootstrap/dist/css/bootstrap.min.css";
 
@@ -39,6 +41,7 @@ function App() {
           <Nav className="ms-auto">
             <Nav.Link as={Link} to="/">Home</Nav.Link>
             <Nav.Link as={Link} to="/stored">View Stored Plates</Nav.Link>
+            <Nav.Link as={Link} to="/registered">Registered Cars</Nav.Link>
             <Button 
               variant={showCameraFeed ? "danger" : "success"} 
               onClick={() => setShowCameraFeed(!showCameraFeed)}
@@ -60,6 +63,7 @@ function App() {
         <Routes>
           <Route path="/" element={<UploadSingleImage />} />
           <Route path="/stored" element={<StoredPlates />} />
+          <Route path="/registered" element={<RegisteredCars />} /> {/* ← ADD THIS */}
         </Routes>
       </Container>
     </Router>

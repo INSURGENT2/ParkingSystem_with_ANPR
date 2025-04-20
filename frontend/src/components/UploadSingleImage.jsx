@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import axios from "axios";
-import { Button, Card, Alert, Form, Spinner, Modal } from "react-bootstrap";
+import { Button, Card, Alert, Form, Spinner, Modal, Row, Col } from "react-bootstrap";
 
 function UploadSingleImage() {
   const [image, setImage] = useState(null);
@@ -8,8 +8,12 @@ function UploadSingleImage() {
   const [allocations, setAllocations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const [popupMessage, setPopupMessage] = useState("");  // State for popup message
-  const [popupType, setPopupType] = useState("");  // Success or error type
+  const [popupMessage, setPopupMessage] = useState("");
+  const [popupType, setPopupType] = useState("");
+  const [parkingSpots, setParkingSpots] = useState([]);
+  const [findingParking, setFindingParking] = useState(false);
+  const [selectedPlate, setSelectedPlate] = useState(null);
+  const [entryPlates, setEntryPlates] = useState([]);
 
   const handleChange = (e) => setImage(e.target.files[0]);
 
@@ -22,27 +26,76 @@ function UploadSingleImage() {
 
     setLoading(true);
     setError("");
+    setResults([]);
+    setAllocations([]);
+    setParkingSpots([]);
+    setEntryPlates([]);
 
     try {
-      // Post the image to the backend to detect plates and allocations
       const response = await axios.post("http://localhost:5000/upload", formData);
+      console.log("Backend response:", response.data);
 
-      // Assuming the backend sends both detected plates and allocations
       setResults(response.data.plates || []);
       setAllocations(response.data.allocations || []);
 
-      // Check if there are notifications to show (for entry/exit)
       if (response.data.notifications && response.data.notifications.length > 0) {
-        const notification = response.data.notifications[0]; // Assuming one notification per plate
-        setPopupMessage(`Plate ${notification.plate} has ${notification.status} for ${notification.duration || 'N/A'}`);
+        const notification = response.data.notifications[0];
+
+        // Only allow "Find Parking" for cars that are entering
+        if (notification.status === "entry") {
+          setEntryPlates([notification.plate]);
+        }
+
+        setPopupMessage(
+          notification.status === "exit"
+            ? `Plate ${notification.plate} has exited after ${notification.duration}`
+            : `Plate ${notification.plate} has entered`
+        );
         setPopupType(notification.status === "exit" ? "success" : "info");
       }
-    } catch {
+    } catch (error) {
+      console.error("Error during image upload:", error);
       setError("Error processing image.");
     } finally {
       setLoading(false);
     }
   };
+
+  
+    const findParkingSpot = async (plateText) => {
+      setSelectedPlate(plateText);
+      setFindingParking(true);
+      try {
+        // First get the parking status
+        const statusResponse = await axios.get("http://localhost:5000/parking-status");
+        console.log("Parking status:", statusResponse.data);
+        
+        // Then try to assign a spot
+        const response = await axios.post("http://localhost:5000/assign-parking", {
+          plate_text: plateText,
+        });
+        console.log("Parking assignment response:", response.data);
+    
+        if (response.data.assigned_spot) {
+          setPopupMessage(`Assigned parking spot ${response.data.assigned_spot.spot_id} to plate ${plateText}`);
+          setPopupType("success");
+          setAllocations([response.data.assigned_spot]);
+        } else {
+          setPopupMessage(response.data.message || "Parking spot assigned successfully");
+          setPopupType("success");
+        }
+    
+        setParkingSpots(statusResponse.data.parking_spots || []);
+      } catch (error) {
+        console.error("Error finding parking spot:", error);
+        const errorMsg = error.response?.data?.error || error.message || "Unknown error";
+        setPopupMessage(`Error finding parking spot: ${errorMsg}`);
+        setPopupType("danger");
+      } finally {
+        setFindingParking(false);
+      }
+    };
+
 
   return (
     <>
@@ -64,12 +117,29 @@ function UploadSingleImage() {
           {results.map((plate, index) => (
             <Card key={index} className="mb-3 shadow-sm">
               <Card.Body>
-                <Card.Title className="text-success fs-5">Plate Number: {plate.text}</Card.Title>
-                <img
-                  src={`data:image/jpeg;base64,${plate.image}`}
-                  alt={`Plate ${index}`}
-                  style={{ width: "100%", border: "1px solid #ccc", borderRadius: "8px" }}
-                />
+                <Row>
+                  <Col md={8}>
+                    <Card.Title className="text-success fs-5">Plate Number: {plate.text}</Card.Title>
+                    <img
+                      src={`data:image/jpeg;base64,${plate.image}`}
+                      alt={`Plate ${index}`}
+                      style={{ width: "100%", border: "1px solid #ccc", borderRadius: "8px" }}
+                    />
+                  </Col>
+                  <Col md={4} className="d-flex align-items-center justify-content-center">
+                    <Button
+                      variant="warning"
+                      onClick={() => findParkingSpot(plate.text)}
+                      disabled={findingParking || !entryPlates.includes(plate.text)}
+                    >
+                      {findingParking && selectedPlate === plate.text ? (
+                        <Spinner animation="border" size="sm" />
+                      ) : (
+                        "Find Parking Spot"
+                      )}
+                    </Button>
+                  </Col>
+                </Row>
               </Card.Body>
             </Card>
           ))}
@@ -86,23 +156,48 @@ function UploadSingleImage() {
                   Spot Allocated: {allocation.plate_text}
                 </Card.Title>
                 <Card.Text>
-                  Spot Coordinates: {`(x: ${allocation.coordinates[0]}, y: ${allocation.coordinates[1]}, w: ${allocation.coordinates[2]}, h: ${allocation.coordinates[3]})`}
+                  Spot ID: {allocation.spot_id}<br />
+                  Coordinates: (x: {allocation.coordinates.x}, y: {allocation.coordinates.y})
                 </Card.Text>
-                <img
-                  src={`data:image/jpeg;base64,${allocation.image}`}
-                  alt={`Allocated Spot ${index}`}
-                  style={{ width: "100%", border: "1px solid #ccc", borderRadius: "8px" }}
-                />
+                {allocation.image && (
+                  <img
+                    src={`data:image/jpeg;base64,${allocation.image}`}
+                    alt={`Allocated Spot ${index}`}
+                    style={{ width: "100%", border: "1px solid #ccc", borderRadius: "8px" }}
+                  />
+                )}
               </Card.Body>
             </Card>
           ))}
         </div>
       )}
 
-      {/* Popup Modal for Notification */}
+      {parkingSpots.length > 0 && (
+        <div className="mt-5">
+          <h4>Parking Spot Status:</h4>
+          <Row>
+            {parkingSpots.map((spot, index) => (
+              <Col key={index} md={4} className="mb-3">
+                <Card className={`shadow-sm ${spot.status === 'occupied' ? 'border-danger' : 'border-success'}`}>
+                  <Card.Body>
+                    <Card.Title>Spot #{spot.spot_id}</Card.Title>
+                    <Card.Text>
+                      Status: <strong>{spot.status}</strong><br />
+                      {spot.assigned_plate && `Plate: ${spot.assigned_plate}`}
+                    </Card.Text>
+                  </Card.Body>
+                </Card>
+              </Col>
+            ))}
+          </Row>
+        </div>
+      )}
+
       <Modal show={popupMessage !== ""} onHide={() => setPopupMessage("")}>
-        <Modal.Header closeButton>
-          <Modal.Title>{popupType === "success" ? "Car Exit Detected" : "Car Entry Detected"}</Modal.Title>
+        <Modal.Header closeButton className={popupType === "success" ? "bg-success text-white" : popupType === "danger" ? "bg-danger text-white" : "bg-info text-white"}>
+          <Modal.Title>
+            {popupType === "success" ? "Success" : popupType === "danger" ? "Error" : "Notification"}
+          </Modal.Title>
         </Modal.Header>
         <Modal.Body>
           <p>{popupMessage}</p>
