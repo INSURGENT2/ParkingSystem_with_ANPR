@@ -377,7 +377,7 @@ def upload():
 
 # ─── Get Free Parking Spots ────────────────────
 video_path = "parking_1920_1080.mp4"
-cap = cv2.VideoCapture(video_path)
+cap = None
 
 # Modify this function in your Flask app
 def get_free_parking_spots():
@@ -496,8 +496,8 @@ def assign_parking():
     if not plate_text:
         return jsonify({"error": "Plate text is required"}), 400
     
-    # Get current free spots
     try:
+        # Get current free spots
         free_spots = get_free_parking_spots()
         
         if not free_spots:
@@ -515,29 +515,32 @@ def assign_parking():
             if not ret:
                 return jsonify({"error": "Could not capture parking area"}), 500
         
-        # Save the screenshot temporarily
-        timestamp = int(time.time())
-        screenshot_path = f"temp/parking_{timestamp}.jpg"
-        cv2.imwrite(screenshot_path, frame)
+        # Create a copy of the frame to draw on
+        marked_frame = frame.copy()
         
         # Assign the first available spot
         assigned_spot = None
         for spot in free_spots:
             if spot['status'] == 'free':
-                # Crop the spot area from the frame
-                y_start = max(0, spot['y'])
-                y_end = min(frame.shape[0], spot['y']+spot['height'])
-                x_start = max(0, spot['x'])
-                x_end = min(frame.shape[1], spot['x']+spot['width'])
+                # Draw a rectangle around the spot
+                cv2.rectangle(
+                    marked_frame, 
+                    (spot['x'], spot['y']), 
+                    (spot['x'] + spot['width'], spot['y'] + spot['height']), 
+                    (0, 255, 0), 
+                    2
+                )
                 
-                spot_img = frame[y_start:y_end, x_start:x_end]
-                
-                # Convert to base64
-                if spot_img.size > 0:
-                    _, spot_buffer = cv2.imencode('.jpg', spot_img)
-                    spot_b64 = base64.b64encode(spot_buffer).decode('utf-8') if spot_buffer is not None else ""
-                else:
-                    spot_b64 = ""
+                # Draw the plate text on the spot
+                cv2.putText(
+                    marked_frame, 
+                    plate_text, 
+                    (spot['x'], spot['y'] - 10), 
+                    cv2.FONT_HERSHEY_SIMPLEX, 
+                    0.9, 
+                    (0, 0, 255), 
+                    2
+                )
                 
                 # Save to database
                 conn = sqlite3.connect("plates.db")
@@ -549,6 +552,10 @@ def assign_parking():
                 conn.commit()
                 conn.close()
                 
+                # Convert marked full image to base64
+                _, img_buffer = cv2.imencode('.jpg', marked_frame)
+                img_base64 = base64.b64encode(img_buffer).decode('utf-8')
+                
                 assigned_spot = {
                     "spot_id": spot['id'],
                     "plate_text": plate_text,
@@ -558,14 +565,9 @@ def assign_parking():
                         "width": spot['width'],
                         "height": spot['height']
                     },
-                    "image": spot_b64,
-                    "full_image": base64.b64encode(cv2.imencode('.jpg', frame)[1]).decode('utf-8')
+                    "marked_image": img_base64
                 }
                 break
-        
-        # Clean up
-        if os.path.exists(screenshot_path):
-            os.remove(screenshot_path)
         
         if assigned_spot:
             return jsonify({
@@ -578,7 +580,6 @@ def assign_parking():
     except Exception as e:
         print(f"Error in assign_parking: {str(e)}")
         return jsonify({"error": f"Server error: {str(e)}"}), 500
-
 if __name__ == "__main__":
     os.makedirs("temp", exist_ok=True)
     os.makedirs(os.path.join("temp", "debug"), exist_ok=True)
